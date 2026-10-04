@@ -2,9 +2,9 @@
 
 Interactive analytics dashboard for a simulated ride-hailing platform: **100K+ trips**, 5K riders, 1K drivers across 10 Indian cities.
 
-**🔗 Live demo:** https://YOUR-APP.onrender.com  ·  **Stack:** MySQL · SQL · Python · Flask · JavaScript · Plotly
+**🔗 Live demo:** https://ride-sharing-analytics-bvph.onrender.com  ·  **Stack:** MySQL · SQL · Python · Flask · JavaScript · Plotly
 
-![Dashboard overview](screenshots/overview.png)
+![Dashboard overview](dashboard.png)
 
 ## What it does
 - Four-tab dashboard (Overview, Drivers, Riders, Demand & Routes) with city, vehicle, payment and date filters
