@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ride-Sharing Analytics Dashboard</title>
+<meta name="description" content="Interactive ride-sharing analytics dashboard built with MySQL, Flask and Plotly.">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+  :root{--bg:#f3f5f9;--card:#fff;--text:#1b2433;--muted:#667085;--line:#e4e7ec;--brand:#4f46e5;--hdr:#111827}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1420;--card:#171e2e;--text:#e6e9f0;--muted:#98a2b3;--line:#273044;--hdr:#0b0f19}}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  header{background:var(--hdr);color:#fff;padding:12px 24px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .brand{margin-right:auto;font-size:18px} .brand small{display:block;font-size:11px;opacity:.65;margin-top:2px}
+  .filters{display:flex;flex-wrap:wrap;gap:8px}
+  select,input,button{padding:7px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--text);font-size:13px}
+  button{cursor:pointer} button:hover{border-color:var(--brand)}
+  nav.tabs{display:flex;gap:4px;padding:10px 24px 0;overflow-x:auto}
+  nav.tabs button{border:none;border-bottom:3px solid transparent;border-radius:0;background:none;color:var(--muted);font-weight:600;padding:10px 14px}
+  nav.tabs button.active{color:var(--brand);border-color:var(--brand)}
+  main{padding:14px 24px 24px;transition:opacity .2s} body.loading main{opacity:.5}
+  .card{background:var(--card);border-radius:10px;box-shadow:0 1px 3px #0002}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+  .kpi{padding:12px 14px} .kpi b{display:block;font-size:21px} .kpi span{font-size:12px;color:var(--muted)}
+  .insights{padding:12px 16px;margin-bottom:14px} .insights h3{margin:0 0 6px;font-size:14px}
+  .insights ul{margin:0;padding-left:18px;font-size:13px;line-height:1.7}
+  .tab{display:none;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr))}
+  .tab.active{display:grid} .chart{height:350px;padding:4px}
+  .err{background:#fee4e2;color:#b42318;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:14px}
+  footer{text-align:center;color:var(--muted);font-size:12px;padding:6px 24px 24px}
+  a{color:var(--brand)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">🚖 <b>Ride-Sharing Analytics</b><small>Synthetic data · MySQL · Flask · Plotly</small></div>
+  <div class="filters">
+    <select id="city"    aria-label="City"><option value="">All cities</option></select>
+    <select id="vehicle" aria-label="Vehicle type"><option value="">All vehicles</option></select>
+    <select id="payment" aria-label="Payment method"><option value="">All payments</option></select>
+    <input type="date" id="start" aria-label="Start date">
+    <input type="date" id="end"   aria-label="End date">
+    <button id="reset" type="button">Reset</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="active" data-tab="overview">Overview</button>
+  <button data-tab="drivers">Drivers</button>
+  <button data-tab="riders">Riders</button>
+  <button data-tab="demand">Demand &amp; Routes</button>
+</nav>
+
+<main>
+  <div id="err" class="err" hidden></div>
+  <div id="kpis" class="kpis"></div>
+  <section id="insights" class="card insights"></section>
+
+  <section id="tab-overview" class="tab active">
+    <div id="ch-city-rev"  class="card chart"></div>
+    <div id="ch-month"     class="card chart"></div>
+    <div id="ch-vehicle"   class="card chart"></div>
+    <div id="ch-payment"   class="card chart"></div>
+    <div id="ch-city-cancel" class="card chart"></div>
+  </section>
+  <section id="tab-drivers" class="tab">
+    <div id="ch-top-drivers"    class="card chart"></div>
+    <div id="ch-cancel-drivers" class="card chart"></div>
+    <div id="ch-fpk"            class="card chart"></div>
+    <div id="ch-city-top"       class="card chart"></div>
+  </section>
+  <section id="tab-riders" class="tab">
+    <div id="ch-top-riders" class="card chart"></div>
+    <div id="ch-segments"   class="card chart"></div>
+  </section>
+  <section id="tab-demand" class="tab">
+    <div id="ch-hour"    class="card chart"></div>
+    <div id="ch-heat"    class="card chart"></div>
+    <div id="ch-routes"  class="card chart"></div>
+    <div id="ch-pickups" class="card chart"></div>
+  </section>
+</main>
+<footer>Synthetic dataset generated for demonstration. Revenue counts completed trips only. · <a href="https://github.com/YOUR-USERNAME/ride-sharing-analytics">Source on GitHub</a></footer>
+
+<script>
+const $ = s => document.querySelector(s);
+const C = ["#4f46e5","#10b981","#f59e0b","#ef4444","#06b6d4","#8b5cf6","#ec4899","#84cc16"];
+const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const SEG = ["1 trip","2-4 trips","5-9 trips","10+ trips"];
+const num = n => n == null ? "—" : Math.round(n).toLocaleString("en-IN");
+const pct = n => n == null ? "—" : Number(n).toFixed(1) + "%";
+const inr = n => n == null ? "—" : "₹" + (n >= 1e7 ? (n/1e7).toFixed(2) + " Cr" : n >= 1e5 ? (n/1e5).toFixed(2) + " L" : Math.round(n).toLocaleString("en-IN"));
+const col = (rows, k) => rows.map(r => r[k]);
+
+/* ---------- Plotly helpers ---------- */
+function baseLayout(title, extra = {}) {
+  const cs = getComputedStyle(document.documentElement);
+  const text = cs.getPropertyValue("--text").trim(), line = cs.getPropertyValue("--line").trim();
+  const axis = { gridcolor: line, zerolinecolor: line, automargin: true };
+  return {
+    title: { text: title, font: { size: 14 } }, paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+    font: { color: text, size: 12, family: "system-ui,sans-serif" }, margin: { t: 44, r: 14, b: 46, l: 54 },
+    ...extra, xaxis: { ...axis, ...(extra.xaxis || {}) }, yaxis: { ...axis, ...(extra.yaxis || {}) }
+  };
+}
+const draw = (id, traces, title, extra) => Plotly.react(id, traces, baseLayout(title, extra), { responsive: true, displayModeBar: false });
+const vbar = (x, y, color, hover) => ({ type: "bar", x, y, marker: { color }, hovertemplate: `%{x}<br>${hover}<extra></extra>` });
+const hbar = (rows, key, color, hover) => ({ type: "bar", orientation: "h", y: col(rows, "label"), x: col(rows, key), marker: { color }, hovertemplate: `%{y}<br>${hover}<extra></extra>` });
+const HB = { yaxis: { autorange: "reversed" }, margin: { t: 44, r: 14, b: 40, l: 170 } };
+
+/* ---------- Render ---------- */
+function renderKpis(k, d) {
+  const seg = Object.fromEntries(d.rider_segments.map(r => [r.segment, r.riders]));
+  const total = Object.values(seg).reduce((a, b) => a + b, 0);
+  const repeat = total ? 100 * (total - (seg["1 trip"] || 0)) / total : null;
+  const items = [
+    ["Total trips", num(k.total_trips)], ["Revenue", inr(k.revenue)], ["Avg fare", inr(k.avg_fare)],
+    ["Cancellation rate", pct(k.cancellation_rate)], ["Fares lost to cancellations", inr(k.lost_revenue)],
+    ["Fare per km", k.fare_per_km == null ? "—" : "₹" + k.fare_per_km.toFixed(2)],
+    ["Active riders", num(k.active_riders)], ["Active drivers", num(k.active_drivers)],
+    ["Completed trips / driver", k.trips_per_driver ?? "—"], ["Revenue / driver", inr(k.revenue_per_driver)],
+    ["Repeat riders", pct(repeat)]
+  ];
+  $("#kpis").innerHTML = items.map(([l, v]) => `<div class="card kpi"><b>${v}</b><span>${l}</span></div>`).join("");
+}
+
+function renderInsights(d) {
+  const k = d.kpis, out = [];
+  if (!k.total_trips) { $("#insights").innerHTML = "<h3>Insights</h3><ul><li>No trips match the selected filters.</li></ul>"; return; }
+  const peak = d.by_hour.reduce((a, b) => b.trips > a.trips ? b : a);
+  out.push(`Demand peaks at <b>${String(peak.hour).padStart(2, "0")}:00</b> with ${(100 * peak.trips / k.total_trips).toFixed(1)}% of all trips.`);
+  const top = d.by_city[0];
+  out.push(`<b>${top.city}</b> leads revenue with ${inr(top.revenue)} (${k.revenue ? (100 * top.revenue / k.revenue).toFixed(0) : 0}% of total).`);
+  const worst = [...d.by_city].sort((a, b) => b.cancellation_rate - a.cancellation_rate)[0];
+  out.push(`Highest city cancellation rate: <b>${worst.city}</b> at ${pct(worst.cancellation_rate)} (platform average ${pct(k.cancellation_rate)}).`);
+  const pay = d.by_payment[0];
+  out.push(`<b>${pay.method}</b> is the most used payment method, with ${(100 * pay.trips / k.total_trips).toFixed(0)}% of trips.`);
+  const cd = d.cancel_drivers[0];
+  if (cd) out.push(`Highest driver cancellation rate: <b>${cd.label}</b> at ${pct(cd.cancel_rate)} over ${cd.trips} trips.`);
+  out.push(`Cancelled trips represent <b>${inr(k.lost_revenue)}</b> of unrealised fares.`);
+  $("#insights").innerHTML = "<h3>Auto-generated insights (from the current filters)</h3><ul>" + out.map(t => `<li>${t}</li>`).join("") + "</ul>";
+}
+
+function render(d) {
+  renderKpis(d.kpis, d); renderInsights(d);
+
+  // Overview
+  draw("ch-city-rev", [vbar(col(d.by_city, "city"), col(d.by_city, "revenue"), C[0], "₹%{y:,.0f}")], "Revenue by city (₹)");
+  draw("ch-month", [
+    { type: "bar", x: col(d.monthly, "month"), y: col(d.monthly, "revenue"), name: "Revenue", marker: { color: C[0] }, hovertemplate: "%{x}<br>₹%{y:,.0f}<extra></extra>" },
+    { type: "scatter", mode: "lines+markers", x: col(d.monthly, "month"), y: col(d.monthly, "revenue_growth_pct"), name: "MoM growth %", yaxis: "y2", line: { color: C[2] } }
+  ], "Monthly revenue and month-over-month growth", { yaxis2: { overlaying: "y", side: "right", ticksuffix: "%", showgrid: false }, legend: { orientation: "h", y: -0.25 } });
+  draw("ch-vehicle", [vbar(col(d.by_vehicle, "vehicle"), col(d.by_vehicle, "revenue"), C[1], "₹%{y:,.0f}")], "Revenue by vehicle type (₹)");
+  draw("ch-payment", [{ type: "pie", hole: 0.55, labels: col(d.by_payment, "method"), values: col(d.by_payment, "trips"), marker: { colors: C }, textinfo: "label+percent" }], "Payment methods (share of trips)", { showlegend: false });
+  const cc = [...d.by_city].sort((a, b) => b.cancellation_rate - a.cancellation_rate);
+  draw("ch-city-cancel", [vbar(col(cc, "city"), col(cc, "cancellation_rate"), C[3], "%{y:.1f}%")], "Cancellation rate by city (%)");
+
+  // Drivers
+  draw("ch-top-drivers", [hbar(d.top_drivers, "revenue", C[0], "₹%{x:,.0f}")], "Top 10 drivers by revenue (₹)", HB);
+  draw("ch-cancel-drivers", [hbar(d.cancel_drivers, "cancel_rate", C[3], "%{x:.1f}% cancelled")], "Highest cancellation rates (min. 30 trips)", HB);
+  draw("ch-fpk", [vbar(col(d.by_vehicle, "vehicle"), col(d.by_vehicle, "fare_per_km"), C[4], "₹%{y:.2f} per km")], "Fare per km by vehicle type (₹)");
+  draw("ch-city-top", [{ ...vbar(col(d.top_driver_per_city, "city"), col(d.top_driver_per_city, "revenue"), C[5], "₹%{y:,.0f}"), text: col(d.top_driver_per_city, "label"), textposition: "outside", cliponaxis: false }], "Top-earning driver in each city (₹)");
+
+  // Riders
+  draw("ch-top-riders", [hbar(d.top_riders, "trips", C[1], "%{x} trips")], "Most active riders (trips)", HB);
+  const segMap = Object.fromEntries(d.rider_segments.map(r => [r.segment, r.riders]));
+  draw("ch-segments", [vbar(SEG, SEG.map(s => segMap[s] || 0), C[2], "%{y:,.0f} riders")], "Riders by number of trips");
+
+  // Demand
+  const sorted = [...col(d.by_hour, "trips")].sort((a, b) => b - a), cut = sorted[2] ?? 0;
+  draw("ch-hour", [{ ...vbar(col(d.by_hour, "hour"), col(d.by_hour, "trips"), C[0], "%{y:,.0f} trips"), marker: { color: col(d.by_hour, "trips").map(t => t >= cut ? C[3] : C[0]) } }], "Trips by hour of day (top 3 hours highlighted)", { xaxis: { dtick: 2 } });
+  const z = DAYS.map(() => Array(24).fill(0)); d.heatmap.forEach(r => z[r.d][r.h] = r.trips);
+  draw("ch-heat", [{ type: "heatmap", z, x: [...Array(24).keys()], y: DAYS, colorscale: "YlOrRd", hovertemplate: "%{y} %{x}:00<br>%{z} trips<extra></extra>" }], "Demand heatmap: weekday × hour", { yaxis: { autorange: "reversed" } });
+  draw("ch-routes", [hbar(d.top_routes, "revenue", C[5], "₹%{x:,.0f}")], "Top 10 routes by revenue (₹)", { ...HB, margin: { t: 44, r: 14, b: 40, l: 250 } });
+  draw("ch-pickups", [hbar(d.top_pickups, "trips", C[4], "%{x} trips")], "Top 10 pickup locations", { ...HB, margin: { t: 44, r: 14, b: 40, l: 190 } });
+}
+
+/* ---------- Data loading ---------- */
+let ctl = null, last = null;
+async function load() {
+  if (ctl) ctl.abort();
+  const mine = ctl = new AbortController();
+  const p = new URLSearchParams();
+  ["city", "vehicle", "payment", "start", "end"].forEach(id => { if ($("#" + id).value) p.set(id, $("#" + id).value); });
+  document.body.classList.add("loading"); $("#err").hidden = true;
+  try {
+    const r = await fetch("/api/dashboard?" + p, { signal: mine.signal });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Request failed");
+    last = d; render(d);
+  } catch (e) {
+    if (e.name !== "AbortError") { $("#err").textContent = "Could not load data: " + e.message; $("#err").hidden = false; }
+  } finally {
+    if (ctl === mine) document.body.classList.remove("loading");
+  }
+}
+const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+
+async function init() {
+  const f = await (await fetch("/api/filters")).json();
+  const fill = (id, items) => items.forEach(v => $("#" + id).insertAdjacentHTML("beforeend", `<option>${v}</option>`));
+  fill("city", f.cities); fill("vehicle", f.vehicles); fill("payment", f.payments);
+  if (f.min_date) { $("#start").min = $("#end").min = f.min_date; $("#start").max = $("#end").max = f.max_date; }
+  ["city", "vehicle", "payment", "start", "end"].forEach(id => $("#" + id).addEventListener("change", debounce(load, 250)));
+  $("#reset").addEventListener("click", () => { ["city", "vehicle", "payment", "start", "end"].forEach(id => $("#" + id).value = ""); load(); });
+  document.querySelectorAll("nav.tabs button").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll("nav.tabs button, .tab").forEach(e => e.classList.remove("active"));
+    b.classList.add("active");
+    const tab = $("#tab-" + b.dataset.tab); tab.classList.add("active");
+    tab.querySelectorAll(".chart").forEach(c => Plotly.Plots.resize(c));      // charts drawn while hidden need a resize
+  }));
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => last && render(last));
+  load();
+}
+init().catch(e => { $("#err").textContent = "Could not start the dashboard: " + e.message; $("#err").hidden = false; });
+</script>
+</body>
+</html>
